@@ -1,0 +1,27 @@
+buildscript {
+  repositories {
+    mavenCentral()
+  }
+}
+
+plugins {
+  id 'org.wiremock.tools.gradle.wiremock-extension-convention' version '0.4.0'
+}
+
+group 'org.wiremock.extensions'
+project.ext {
+  versions = [
+          wiremock: '3.12.0'
+  ]
+}
+
+dependencies {
+  compileOnly("org.wiremock:wiremock:${versions.wiremock}")
+  implementation platform('software.amazon.awssdk:bom:2.27.21')
+  implementation 'software.amazon.awssdk:s3'
+  implementation 'software.amazon.awssdk:sso'
+  implementation 'software.amazon.awssdk:ssooidc'
+}
+
+shadowJar {
+}
