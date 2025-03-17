@@ -3,7 +3,6 @@ package org.wiremock;
 import com.github.tomakehurst.wiremock.common.ContentTypes;
 import com.github.tomakehurst.wiremock.common.InvalidInputException;
 import com.github.tomakehurst.wiremock.common.Json;
-import com.github.tomakehurst.wiremock.common.Metadata;
 import com.github.tomakehurst.wiremock.extension.MappingsLoaderExtension;
 import com.github.tomakehurst.wiremock.extension.StubLifecycleListener;
 import com.github.tomakehurst.wiremock.stubbing.StubMapping;
@@ -11,9 +10,7 @@ import com.github.tomakehurst.wiremock.stubbing.StubMappingCollection;
 import com.github.tomakehurst.wiremock.stubbing.StubMappings;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -61,8 +58,10 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
       try {
         stubMappings.addMapping(stub);
       } catch (InvalidInputException e) {
-        if (e.getErrors().first().getCode() == 109) {
+        if (e.getErrors().first().getCode() == 109) { // duplicate id
           System.err.println(e.getErrors().first().getDetail());
+        } else {
+          throw e;
         }
       }
     });
@@ -73,25 +72,9 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
     if (json.contains("\"mappings\"")) {
       return Json.read(json, StubMappingCollection.class)
                  .getMappings()
-                 .stream()
-                 .peek(sm -> setInitialFolderMetadata(sm, s3FileContent));
+                 .stream();
     }
-    return Stream.of(StubMapping.buildFrom(json))
-                 .peek(sm -> setInitialFolderMetadata(sm, s3FileContent));
-  }
-
-  private void setInitialFolderMetadata(StubMapping stubMapping, S3FileContent fileContent) {
-    String folder = Optional.ofNullable(stubMapping.getMetadata())
-                            .filter(metadata -> metadata.containsKey("folder"))
-                            .map(metadata -> metadata.getString("folder"))
-                            .orElse("");
-    if (!folder.isEmpty()) {
-      return;
-    }
-    if (stubMapping.getMetadata() == null) {
-      stubMapping.setMetadata(new Metadata());
-    }
-    stubMapping.getMetadata().put("folder", fileContent.folder);
+    return Stream.of(StubMapping.buildFrom(json));
   }
 
   private List<S3FileContent> getAllFileContentsFromS3() {
@@ -99,8 +82,7 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
     return objects.stream()
                   .filter(object -> object.key().endsWith(JSON_EXTENSION))
                   .parallel()
-                  .map(object -> new S3FileContent(object.key(), getFolder(object.key()),
-                                                   getFileContent(object.key())))
+                  .map(object -> new S3FileContent(object.key(), getFileContent(object.key())))
                   .collect(Collectors.toList());
   }
 
@@ -118,14 +100,6 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
     } while (nextContinuationToken != null);
     System.out.println("Number of objects in the bucket: " + result.size());
     return result;
-  }
-
-  private String getFolder(String key) {
-    String filePath = key.replace(bucket, "").replace(basePath, "");
-    if (filePath.lastIndexOf("/") < 0) {
-      return "";
-    }
-    return filePath.substring(0, filePath.lastIndexOf("/"));
   }
 
   private String getFileContent(String key) {
@@ -156,14 +130,17 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
   }
 
   private void saveStub(StubMapping stub) {
-    String key = getKey(stub);
-    s3.putObject(PutObjectRequest.builder()
-                                 .bucket(bucket)
-                                 .key(key)
-                                 .contentType(ContentTypes.APPLICATION_JSON)
-                                 .metadata(Map.of("title", stub.getName()))
-                                 .build(),
-                 RequestBody.fromBytes(Json.toByteArray(stub)));
+    try {
+      String key = getKey(stub);
+      s3.putObject(PutObjectRequest.builder()
+                                   .bucket(bucket)
+                                   .key(key)
+                                   .contentType(ContentTypes.APPLICATION_JSON)
+                                   .build(),
+                   RequestBody.fromBytes(Json.toByteArray(stub)));
+    } catch (Exception e) {
+      System.err.println(e.getMessage());
+    }
   }
 
   private String getKey(StubMapping stub) {
@@ -178,11 +155,10 @@ public class S3SourceExtension implements StubLifecycleListener, MappingsLoaderE
 
   static class S3FileContent {
 
-    private final String key, folder, content;
+    private final String key, content;
 
-    public S3FileContent(String key, String folder, String content) {
+    public S3FileContent(String key, String content) {
       this.key = key;
-      this.folder = folder;
       this.content = content;
     }
   }
